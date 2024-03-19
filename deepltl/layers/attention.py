@@ -1,10 +1,11 @@
 """Implementation of scaled dot-product attention and multi-head attention as described in 'Attention Is All You Need' (Vaswani et al., 2017) based on https://www.tensorflow.org/tutorials/text/transformer"""
 
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
 
-import tensorflow as tf
 
-
-def scaled_dot_product_attention(queries, keys, values, mask=None, dtype=tf.float32):
+def scaled_dot_product_attention(queries, keys, values, mask=None):
     """
     Args:
         queries: (..., num_queries, d_queries)
@@ -15,28 +16,27 @@ def scaled_dot_product_attention(queries, keys, values, mask=None, dtype=tf.floa
         attention: (..., num_queries, d_values)
         attention_weights: (..., num_queries, num_keys)
     """
-    attention_logits = tf.matmul(queries, keys, transpose_b=True)  # (..., num_queries, num_keys)
+    attention_logits = torch.matmul(queries, keys.transpose(-2, -1))  # (..., num_queries, num_keys)
 
     # scale by square root of d_queries
-    d_queries = tf.cast(tf.shape(queries)[-1], dtype)
-    scaled_attention_logits = attention_logits / tf.math.sqrt(d_queries)
+    d_queries = queries.size(-1)
+    scaled_attention_logits = attention_logits / torch.sqrt(torch.tensor(d_queries, dtype=queries.dtype))
 
     # mask scaled values
     if mask is not None:
-        scaled_attention_logits += (mask * dtype.min)
+        scaled_attention_logits += (mask * torch.finfo(queries.dtype).min)
 
     # perform softmax over key axis and multiply resulting attention weights with values
-    attention_weights = tf.nn.softmax(scaled_attention_logits, axis=-1)  # (..., num_queries, num_keys)
-    attention = tf.matmul(attention_weights, values)  # (..., num_queries, d_values)
+    attention_weights = F.softmax(scaled_attention_logits, dim=-1)  # (..., num_queries, num_keys)
+    attention = torch.matmul(attention_weights, values)  # (..., num_queries, d_values)
     return attention, attention_weights
 
 
-class MultiHeadAttention(tf.keras.layers.Layer):
+class MultiHeadAttention(nn.Module):
 
     def __init__(self, d_embedding, num_heads):
-
         if d_embedding % num_heads != 0:
-            raise ValueError(f"Embedding dimension {d_embedding} must be devisible by number of heads {num_heads}.")
+            raise ValueError(f"Embedding dimension {d_embedding} must be divisible by number of heads {num_heads}.")
 
         super().__init__()
 
@@ -44,17 +44,13 @@ class MultiHeadAttention(tf.keras.layers.Layer):
         self.num_heads = num_heads
         self.d_heads = d_embedding // num_heads
 
-    def build(self, input_shape):
+        self.Q = nn.Linear(d_embedding, d_embedding)
+        self.K = nn.Linear(d_embedding, d_embedding)
+        self.V = nn.Linear(d_embedding, d_embedding)
 
-        self.Q = tf.keras.layers.Dense(self.d_embedding)
-        self.K = tf.keras.layers.Dense(self.d_embedding)
-        self.V = tf.keras.layers.Dense(self.d_embedding)
+        self.final_projection = nn.Linear(d_embedding, d_embedding)
 
-        self.final_projection = tf.keras.layers.Dense(self.d_embedding)
-
-        super().build(input_shape)
-
-    def split_heads(self, input, batch_size):
+    def _split_heads(self, input, batch_size):
         """
         Splits last dimension d_embedding into (num_heads, d_heads) and transposes result
         Args:
@@ -62,10 +58,10 @@ class MultiHeadAttention(tf.keras.layers.Layer):
         Returns:
             (batch_size, num_heads, num_inputs, d_heads)
         """
-        input = tf.reshape(input, (batch_size, -1, self.num_heads, self.d_heads))
-        return tf.transpose(input, perm=[0, 2, 1, 3])
+        input = input.view(batch_size, -1, self.num_heads, self.d_heads)
+        return input.transpose(1, 2)
 
-    def call(self, queries, keys, values, mask=None, cache=None):
+    def forward(self, queries, keys, values, mask=None, cache=None):
         """
         Args:
             queries: (batch_size, num_queries, d_embedding)
@@ -80,50 +76,26 @@ class MultiHeadAttention(tf.keras.layers.Layer):
             attention: (batch_size, num_queries, d_embedding)
             attention_weights: (batch_size, num_queries, num_keys)
         """
-        batch_size = tf.shape(queries)[0]
+        batch_size = queries.size(0)
 
         queries = self.Q(queries)
         keys = self.K(keys)
         values = self.V(values)
 
-        queries = self.split_heads(queries, batch_size)  # (batch_size, num_heads, num_queries, d_heads)
-        keys = self.split_heads(keys, batch_size)  # (batch_size, num_heads, num_keys, d_heads)
-        values = self.split_heads(values, batch_size)  # (batch_size, num_heads, num_keys, d_heads)
+        queries = self._split_heads(queries, batch_size)  # (batch_size, num_heads, num_queries, d_heads)
+        keys = self._split_heads(keys, batch_size)  # (batch_size, num_heads, num_keys, d_heads)
+        values = self._split_heads(values, batch_size)  # (batch_size, num_heads, num_keys, d_heads)
 
         if cache is not None:
             # concatenate cached keys and values
-            keys = tf.concat([tf.cast(tf.transpose(cache['keys'], perm=[0, 2, 1, 3]), keys.dtype), keys], axis=2)
-            values = tf.concat([tf.cast(tf.transpose(cache['values'], perm=[0, 2, 1, 3]), values.dtype), values], axis=2)
+            keys = torch.cat([cache['keys'].transpose(1, 2), keys], dim=2)
+            values = torch.cat([cache['values'].transpose(1, 2), values], dim=2)
             # update cache
-            cache['keys'] = tf.transpose(keys, perm=[0, 2, 1, 3])
-            cache['values'] = tf.transpose(values, perm=[0, 2, 1, 3])
+            cache['keys'] = keys.transpose(1, 2)
+            cache['values'] = values.transpose(1, 2)
 
-        scaled_attention, attention_weights = scaled_dot_product_attention(
-            queries, keys, values, mask)  # (batch_size, num_heads, num_queries, d_heads) (batch_size, num_heads, num_queries, num_keys)
-        scaled_attention = tf.transpose(scaled_attention, perm=[0, 2, 1, 3])  # (batch_size, num_queries, num_heads, d_heads)
-        concat_attention = tf.reshape(
-            scaled_attention, (batch_size, -1, self.d_embedding))  # (batch_size, num_queries, d_embedding)
+        scaled_attention, attention_weights = scaled_dot_product_attention(queries, keys, values, mask)  # (batch_size, num_heads, num_queries, d_heads) (batch_size, num_heads, num_queries, num_keys)
+        scaled_attention = scaled_attention.transpose(1, 2)  # (batch_size, num_queries, num_heads, d_heads)
+        concat_attention = scaled_attention.contiguous().view(batch_size, -1, self.d_embedding)  # (batch_size, num_queries, d_embedding)
         attention = self.final_projection(concat_attention)  # (batch_size, num_queries, d_embedding)
         return attention, attention_weights
-
-
-class SimpleMultNormAttention(tf.keras.layers.Layer):
-    def __init__(self, units_size):
-        super(SimpleMultNormAttention, self).__init__()
-        self.units_size = units_size
-        self.W = tf.keras.layers.Dense(units_size)
-
-    def call(self, query, values):
-        # query: (batch_size, units_size) = current dec state
-        # values: (batch_size, seq_len, units_size) = enc outputs
-        query_expanded = tf.expand_dims(query, 1) # (batch_size, 1, units_size)
-
-        y_scaled = self.W(values)
-        score = query_expanded * y_scaled
-        score = tf.reduce_sum(score, axis=2, keepdims=True) # (batch_size, seq_len)
-        score /= tf.sqrt(tf.constant(self.units_size, dtype=tf.float32))
-        weights = tf.nn.softmax(score, axis=1)
-
-        context_vector = weights * values # (batch_size, seq_len, units_size)
-        context_vector = tf.reduce_sum(context_vector, axis=1) # (batch_size, units_size)
-        return context_vector, weights

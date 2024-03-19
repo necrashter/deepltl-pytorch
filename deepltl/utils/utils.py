@@ -33,7 +33,7 @@ class TicToc():
             axes[idx].hist(vals)
             axes[idx].set_xlabel('time / s')
             axes[idx].title.set_text(name)
-            axes[idx].set_yscale('log', nonposy='clip')
+            axes[idx].set_yscale('log', nonpositive='clip')
         if save_to is not None:
             figure.savefig(save_to)
         if show:

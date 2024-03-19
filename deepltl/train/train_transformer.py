@@ -1,15 +1,21 @@
 # pylint: disable = line-too-long
 import os
 import os.path as path
-os.environ['TF_CPP_MIN_LOG_LEVEL'] = '1'  # reduce TF verbosity
-import tensorflow as tf
+import sys
+import torch
+import torch.nn as nn
+import torch.optim as optim
+import torch.utils.data as data
+from torch.utils.tensorboard import SummaryWriter
 import urllib.request
+from tqdm import tqdm
 
-from deepltl.train.common import *
-from deepltl.optimization import lr_schedules
-from deepltl.models import transformer
-from deepltl.data import vocabulary
-from deepltl.data import datasets
+from deepltl.train.common import argparser, setup, log_params, get_latest_checkpoint, CustomPadCollate, get_run_path
+from deepltl.train.common import test_and_analyze_ltl, test_and_analyze_sat
+from deepltl.optimization.lr_schedules import TransformerSchedule
+from deepltl.models.transformer import AccuracyTracker, Transformer
+from deepltl.data import vocabulary, datasets
+from deepltl.data.datasets import get_dataset_splits
 
 def download_dataset(dataset_name, problem, splits, data_dir):
     if not path.isdir(data_dir):
@@ -33,7 +39,7 @@ def download_dataset(dataset_name, problem, splits, data_dir):
     if not path.isdir(dataset_dir):
         os.mkdir(dataset_dir)
 
-    #check if splits arleady exist
+    # Check if splits already exist
     for split in splits:
         split_dir = path.join(dataset_dir, split + '.txt')
         if not path.isfile(split_dir):
@@ -91,12 +97,27 @@ def run():
     if params.problem == 'ltl':
         input_vocab = vocabulary.LTLVocabulary(aps=aps, consts=consts, ops=['U', 'X', '!', '&'], eos=not params.tree_pos_enc)
         target_vocab = vocabulary.TraceVocabulary(aps=aps, consts=consts, ops=['&', '|', '!'])
-        dataset = datasets.LTLTracesDataset(dataset_name, input_vocab, target_vocab, data_dir=path.join(params.data_dir, 'ltl'))
         params.max_decode_length = 64
+        data_dir = path.join(params.data_dir, 'ltl')
+        dataset_class = datasets.LTLTracesDataset
+        dataset_args = {
+            'ltl_vocab': input_vocab,
+            'trace_vocab': target_vocab,
+            'max_length_formula': params.max_encode_length - 2,
+            'max_length_trace': params.max_decode_length - 2,
+            'prepend_start_token': False,
+            'tree_pos_enc': params.tree_pos_enc,
+        }
     elif params.problem == 'prop':
         input_vocab = vocabulary.LTLVocabulary(aps, consts, ['!', '&', '|', '<->', 'xor'], eos=not params.tree_pos_enc)
         target_vocab = vocabulary.TraceVocabulary(aps, consts, [], special=[])
-        dataset = datasets.BooleanSatDataset(dataset_name, data_dir=path.join(params.data_dir, 'prop'), formula_vocab=input_vocab, assignment_vocab=target_vocab)
+        data_dir = path.join(params.data_dir, 'prop')
+        dataset_class = datasets.BooleanSatDataset
+        dataset_args = {
+            'formula_vocab': input_vocab,
+            'assignment_vocab': target_vocab,
+            'tree_pos_enc': params.tree_pos_enc,
+        }
         if params.ds_name == 'prop-60-no-derived':
             params.max_decode_length = 22
         else:
@@ -108,7 +129,7 @@ def run():
     params.target_start_id = target_vocab.start_id
     params.target_eos_id = target_vocab.eos_id
     params.target_pad_id = target_vocab.pad_id
-    params.dtype = tf.float32
+    params.dtype = torch.float32
 
     if params.d_embed_dec is None:
         params.d_embed_dec = params.d_embed_enc
@@ -120,67 +141,118 @@ def run():
     for key, val in vars(params).items():
         print('{:25} : {}'.format(key, val))
 
-    if not params.test: # train mode
-        splits = ['train', 'val', 'test']
-        if params.problem == 'ltl':
-            train_dataset, val_dataset, test_dataset = dataset.get_dataset(splits, max_length_formula=params.max_encode_length - 2, max_length_trace=params.max_decode_length - 2, prepend_start_token=False, tree_pos_enc=params.tree_pos_enc)
-        if params.problem == 'prop':
-            train_dataset, val_dataset, test_dataset = dataset.get_dataset(splits=splits, tree_pos_enc=params.tree_pos_enc)
-        train_dataset = prepare_dataset_no_tf(train_dataset, params.batch_size, params.d_embed_enc, shuffle=True, pos_enc=params.tree_pos_enc)
-        val_dataset = prepare_dataset_no_tf(val_dataset, params.batch_size, params.d_embed_enc, shuffle=False,  pos_enc=params.tree_pos_enc)
-    else:  # test mode
-        splits = ['test']
-        if params.problem == 'ltl':
-            test_dataset, = dataset.get_dataset(['test'], max_length_formula=params.max_encode_length - 2, max_length_trace=params.max_decode_length - 2, prepend_start_token=False, tree_pos_enc=params.tree_pos_enc)
-        if params.problem == 'prop':
-            test_dataset, = dataset.get_dataset(splits=['test'], tree_pos_enc=params.tree_pos_enc)
+    device = torch.device(params.device)
+    print("Using device:", device)
 
+    collate_fn = CustomPadCollate(params.d_embed_enc if params.tree_pos_enc else None)
     if not params.test: # train mode
+        train_dataset, val_dataset, test_dataset = get_dataset_splits(dataset_name, ['train', 'val', 'test'], dataset_class, dataset_args, data_dir)
+        # NOTE: Tensorflow implementation used to drop the last batch (drop_last=True in PyTorch Dataloader)
+        train_dataloader = data.DataLoader(train_dataset, batch_size=params.batch_size, shuffle=True, collate_fn=collate_fn)
+        val_dataloader = data.DataLoader(val_dataset, batch_size=params.batch_size, shuffle=False, collate_fn=collate_fn)
+    else:  # test mode
+        test_dataset, = get_dataset_splits(dataset_name, ['test'], dataset_class, dataset_args, data_dir)
+
+    checkpoint_path = get_run_path("checkpoints", **vars(params))
+    latest_checkpoint = get_latest_checkpoint(checkpoint_path)
+
+    if not params.test:  # train mode
         # Model & Training specification
-        learning_rate = lr_schedules.TransformerSchedule(params.d_embed_enc, warmup_steps=params.warmup_steps)
-        optimizer = tf.keras.optimizers.Adam(learning_rate=learning_rate, beta_1=0.9, beta_2=0.98, epsilon=1e-9)
-        model = transformer.create_model(vars(params), training=True, custom_pos_enc=params.tree_pos_enc)
-        latest_checkpoint = last_checkpoint(**vars(params))
+        model = Transformer(vars(params)).to(device)
+        # lr is 1 so that it's determined solely by the scheduler
+        optimizer = optim.Adam(model.parameters(), lr=1.0, betas=(0.9, 0.98), eps=1e-9)
+        criterion = nn.CrossEntropyLoss(ignore_index=target_vocab.pad_id, reduction="sum")
+        lr_scheduler = TransformerSchedule(optimizer, params.d_embed_enc, warmup_steps=params.warmup_steps)
         if latest_checkpoint:
-            model.load_weights(latest_checkpoint).expect_partial()
+            model.load_state_dict(torch.load(latest_checkpoint, map_location=device))
             print(f'Loaded weights from checkpoint {latest_checkpoint}')
+        else:
+            print('No checkpoint found, training from scratch')
 
-        callbacks = [checkpoint_callback(save_weights_only=True, save_best_only=False, **vars(params)),
-                     tensorboard_callback(**vars(params)),
-                     tf.keras.callbacks.EarlyStopping('val_accuracy', patience=4, restore_best_weights=True)]
-        # Train!
+        # TODO: Add early stopping
+        # callbacks = [tf.keras.callbacks.EarlyStopping('val_accuracy', patience=4, restore_best_weights=True)]
+
+        writer = SummaryWriter(log_dir=get_run_path("tensorboard", **vars(params)))
+        acc_tracker = AccuracyTracker(vars(params))
         log_params(**vars(params))
-        model.compile(optimizer=optimizer)
-        try:
-            model.fit(train_dataset, epochs=params.epochs, validation_data=val_dataset, validation_freq=1, callbacks=callbacks, initial_epoch=params.initial_epoch, verbose=1, shuffle=False)
-        except Exception as e:
-            print('---- Exception occurred during training ----\n' + str(e))
+
+        # Train!
+        train_iter = 0
+        print("Training begins")
+        for epoch in range(params.epochs):
+            model.train()
+            train_loss = 0.0
+            for batch in tqdm(train_dataloader, leave=False, desc=f'Train {epoch + 1}/{params.epochs}'):
+                batch = tuple(x.to(device) for x in batch)
+                # batch = (input, target) or (input, target, positional_encoding)
+                optimizer.zero_grad()
+                outputs = model(*batch)  # outputs have the size (batch, seq_len, vocab_size)
+                acc_tracker.record(outputs, batch[1])
+                loss = criterion(outputs.flatten(end_dim=-2), batch[1].flatten())
+
+                train_loss += loss.item()
+                writer.add_scalar("batch/loss", loss.item(), train_iter)
+                writer.add_scalar("batch/lr", lr_scheduler.get_last_lr()[0], train_iter)
+
+                loss.backward()
+                optimizer.step()
+                lr_scheduler.step()
+                train_iter += 1
+            train_loss /= len(train_dataset)
+            acc_tracker.write(writer, epoch, "train")
+
+            # Validation
+            model.eval()
+            with torch.no_grad():
+                val_loss = 0.0
+                for val_batch in tqdm(val_dataloader, leave=False, desc=f'Val {epoch + 1}/{params.epochs}'):
+                    val_batch = tuple(x.to(device) for x in val_batch)
+                    val_outputs = model(*val_batch)
+                    acc_tracker.record(val_outputs, val_batch[1])
+                    val_loss += criterion(val_outputs.flatten(end_dim=-2), val_batch[1].flatten()).item()
+                val_loss /= len(val_dataset)
+                acc_tracker.write(writer, epoch, "val")
+
+            print(f'Epoch {epoch+1}/{params.epochs}, Train Loss: {train_loss}, Val Loss: {val_loss}')
+
+            writer.add_scalar("loss/train", train_loss, epoch)
+            writer.add_scalar("loss/val", val_loss, epoch)
+            writer.flush()
+
+            # Save model
+            os.makedirs(checkpoint_path, exist_ok=True)
+            filepath = os.path.join(checkpoint_path, f'ep{epoch+1:03d}_vl{val_loss:.3f}.pth')
+            torch.save(model.state_dict(), filepath)
+    
+        writer.close()
     else:  # test mode
-        prediction_model = transformer.create_model(vars(params), training=False, custom_pos_enc=params.tree_pos_enc)
-        latest_checkpoint = last_checkpoint(**vars(params))
+        prediction_model = Transformer(vars(params)).to(device)
         if latest_checkpoint:
-            prediction_model.load_weights(latest_checkpoint).expect_partial()
+            prediction_model.load_state_dict(torch.load(latest_checkpoint, map_location=device))
             print(f'Loaded weights from checkpoint {latest_checkpoint}')
         else:
             sys.exit('Could not load weights from checkpoint')
         sys.stdout.flush()
+        prediction_model.eval()
 
-        padded_shapes = ([None], [None, params.d_embed_enc], [None]) if params.tree_pos_enc else ([None], [None])
-        test_dataset = test_dataset.shuffle(100000, seed=42).take(100).padded_batch(params.batch_size, padded_shapes=padded_shapes)
+        test_subset = data.Subset(test_dataset, torch.arange(100))
+        test_dataloader = data.DataLoader(test_subset, batch_size=params.batch_size, shuffle=False, collate_fn=collate_fn)
 
         if params.problem == 'ltl':
             if params.tree_pos_enc:
                 def pred_fn(x, pe):
-                    output, _ = prediction_model([x, pe], training=False)
-                    return output
+                    # Target is still none
+                    output = prediction_model(x, None, pe)
+                    return output["outputs"]
             else:
                 def pred_fn(x):
-                    output, _ = prediction_model(x, training=False)
-                    return output
-            test_and_analyze_ltl(pred_fn, test_dataset, input_vocab, target_vocab, log_name='test.log', **vars(params))
-
-        if params.problem == 'prop':
-            test_and_analyze_sat(prediction_model, test_dataset, input_vocab, target_vocab, log_name='test.log', **vars(params))
+                    output = prediction_model(x)
+                    return output["outputs"]
+            test_and_analyze_ltl(pred_fn, test_dataloader, device, input_vocab, target_vocab, log_name='test.log', **vars(params))
+        elif params.problem == 'prop':
+            test_and_analyze_sat(prediction_model, test_dataloader, device, input_vocab, target_vocab, log_name='test.log', **vars(params))
+        else:
+            raise ValueError(f'Unknown problem {params.problem}')
 
 
 if __name__ == '__main__':
