@@ -115,7 +115,7 @@ def get_latest_checkpoint(checkpoint_path):
 def test_and_analyze_ltl(pred_fn, dataloader, torch_device, in_vocab=None, out_vocab=None, plot_name='test_results', log_name=None, **kwargs):
     plotdir = os.path.join(kwargs['job_dir'], kwargs['run_name'])
     os.makedirs(plotdir, exist_ok=True)
-    proc_args = ['-f', '-', '-t', '-', '-r', '-', '--per-size', '--save-analysis', 'tmp_test_results', '--validator', 'spot', '--log-level', '1']
+    proc_args = ['-f', '-', '-t', '-', '-r', '-', '--per-size', '--save-analysis', 'tmp_test_results', '--validator', 'spot', '--log-level', '3']
     if log_name is not None:
         proc_args.extend(['-l', os.path.join(plotdir, log_name)])
     proc = subprocess.Popen(['python3', '-m', 'deepltl.data.trace_check'] + proc_args,

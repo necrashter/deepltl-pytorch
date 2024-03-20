@@ -1,11 +1,13 @@
 """
-Beam Search implementation taken from
+Beam Search implementation adapted from
 https://github.com/tensorflow/models/blob/master/official/nlp/modeling/ops/beam_search.py
+
+The primary difference is that this implementation uses negative infinities instead of small negative numbers.
+Using small negative numbers was causing the beam search to produce unexpected results.
 """
 
 import torch
 import torch.nn.functional as F
-
 
 def map_structure(func, nested):
     if isinstance(nested, dict):
@@ -105,7 +107,7 @@ class BeamSearch:
         alive_cache = map_structure(lambda t: self.expand_to_beam_size(t), initial_cache)
 
         finished_seq = torch.zeros(self.batch_size, self.beam_size, 1, dtype=torch.int32, device=self.device)
-        finished_scores = torch.ones(self.batch_size, self.beam_size, dtype=self.dtype, device=self.device) * torch.finfo(self.dtype).min
+        finished_scores = torch.ones(self.batch_size, self.beam_size, dtype=self.dtype, device=self.device) * float("-inf")
         finished_flags = torch.zeros(self.batch_size, self.beam_size, dtype=torch.bool, device=self.device)
 
         state = {
@@ -141,11 +143,13 @@ class BeamSearch:
         max_length_norm = self.length_normalization(self.alpha, self.max_decode_length)
         best_alive_scores = alive_log_probs[:, 0] / max_length_norm
 
-        # get worst scores in finished sequences
-        finished_scores *= finished_flags.type(self.dtype)  # set filler scores to zero
+        # Get worst scores in finished sequences
+        # Set filler scores to zero
+        finished_scores = torch.where(finished_flags, finished_scores, 0.0)
         worst_finished_scores = torch.min(finished_scores, dim=1)[0]  # use [0] to extract scores as a tensor
         finished_batches = torch.any(finished_flags, dim=1)
-        worst_finished_scores += ((1.0 - finished_batches.type(self.dtype)) * torch.finfo(self.dtype).min)  # set to large negative if no finished sequences
+        # Set to negative infinity if no finished sequences
+        worst_finished_scores += torch.where(finished_batches, 0.0, float("-inf"))
 
         worst_finished_better_than_best_alive = torch.all(worst_finished_scores > best_alive_scores)
 
@@ -199,8 +203,7 @@ class BeamSearch:
         new_cache = map_structure(lambda t: self.unflatten_beam_dim(t), flat_cache)
 
         # Convert logits to normalized log probs
-        candidate_log_probs = F.log_softmax(logits, dim=-1)
-        # candidate_log_probs = logits - torch.logsumexp(logits, dim=2, keepdim=True)
+        candidate_log_probs = logits.log_softmax(dim=-1)
 
         log_probs = candidate_log_probs + alive_log_probs.unsqueeze(2)  # (batch_size, beam_size, vocab_size)
 
@@ -230,10 +233,12 @@ class BeamSearch:
                 Log probabilities of top alive sequences with shape (batch_size, beam_size)
                 Cache of top alive sequences
         """
-        # Set finished sequences to large negative number
-        new_alive_log_probs += new_finished_flags.to(self.dtype) * torch.finfo(self.dtype).min
+        # Set finished sequences to negative infinity
+        new_alive_log_probs = torch.where(new_finished_flags, float("-inf"), new_alive_log_probs)
 
         top_alive_seq, top_alive_log_probs, top_alive_cache = self.gather_top_beams([new_alive_seq, new_alive_log_probs, new_alive_cache], new_alive_log_probs, self.beam_size)
+        # Debug for NaNs if it doesn't work correctly
+        # assert torch.all(top_alive_log_probs.isfinite()), "All alive log probs should be finite"
 
         return {
             StateKeys.ALIVE_SEQ: top_alive_seq,
@@ -266,8 +271,8 @@ class BeamSearch:
         # Calculate new scores from log probabilities
         length_norm = self.length_normalization(self.alpha, cur_index + 1)
         new_scores = new_alive_log_probs / length_norm
-        # Set the scores of the still-alive seq in new_seq to large negative values.
-        new_scores += (1. - new_finished_flags.to(self.dtype)) * torch.finfo(self.dtype).min
+        # Set the scores of the still-alive seq in new_seq to negative infinity.
+        new_scores += torch.where(new_finished_flags, 0.0, float("-inf"))
 
         finished_seq = torch.cat([finished_seq, new_alive_seq], dim=1)
         finished_scores = torch.cat([finished_scores, new_scores], dim=1)
@@ -303,12 +308,15 @@ class BeamSearch:
         return self.gather_beams(nested, top_indices, beam_size)
 
     def length_normalization(self, alpha, length):
+        """
+        Calculate the length normalization divisor according to https://arxiv.org/abs/1609.08144
+        """
         # Check if length is a torch Tensor
         if isinstance(length, torch.Tensor):
             length = length.to(self.dtype)
         else:
             length = torch.tensor(length, dtype=self.dtype, device=self.device)
-        return torch.pow(length, alpha)
+        return torch.pow((length + 5.0) / 6.0, alpha)
 
     def expand_to_beam_size(self, tensor):
         """Tiles a given tensor by beam_size.

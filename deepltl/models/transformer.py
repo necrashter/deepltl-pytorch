@@ -401,9 +401,7 @@ class Transformer(nn.Module):
             decoder_output, _ = self.decoder_stack(
                 decoder_input, cache['encoder_output'], self_attention_mask, cache['input_padding_mask'], cache)
             output = self.final_projection(decoder_output)
-            probs = self.softmax(output)
-            probs = probs.squeeze(1)
-            return probs, cache
+            return output.squeeze(1), cache
 
         initial_ids = torch.ones(batch_size, dtype=torch.int32, device=encoder_output.device) * self.params['target_start_id']
 
