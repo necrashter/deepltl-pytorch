@@ -61,6 +61,8 @@ def run():
     parser.add_argument('--dropout', type=float, default=0.1)
     parser.add_argument('--warmup-steps', type=int, default=4000)
     parser.add_argument('--tree-pos-enc', action='store_true', default=False, help='use tree positional encoding')
+    parser.add_argument('--layer-norm-eps', type=float, default=1e-6, help='Epsilon value used in layer norm')
+    parser.add_argument('--seed', type=int, help='Seed for the random number generator')
     params = parser.parse_args()
     setup(**vars(params))
 

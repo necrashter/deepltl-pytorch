@@ -1,6 +1,7 @@
 import os
 import sys
 import shutil
+import random
 import subprocess
 from argparse import ArgumentParser
 
@@ -72,7 +73,7 @@ def argparser():
     return parser
 
 
-def setup(binary_path, **kwargs):
+def setup(binary_path, seed, **kwargs):
     # GPU stuff
     if torch.cuda.is_available():
         torch.backends.cudnn.enabled = True
@@ -80,6 +81,16 @@ def setup(binary_path, **kwargs):
         torch.backends.cudnn.benchmark = True
     else:
         print("Warning: CUDA not available, running on CPU.")
+
+    if seed is not None:
+        torch.manual_seed(seed)
+        torch.use_deterministic_algorithms(True)
+        # Not used but just to make sure
+        random.seed(seed)
+        np.random.seed(seed)
+        print("Seed:", seed)
+    else:
+        print("No seed is given")
         
     # Get binaries
     filenames = ['aalta']

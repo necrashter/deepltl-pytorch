@@ -1,4 +1,6 @@
-""" Transformer implementation based on https://github.com/tensorflow/models/tree/master/official/nlp/transformer"""
+"""
+Transformer implementation based on https://github.com/tensorflow/models/tree/master/official/nlp/transformer
+"""
 
 import torch
 import torch.nn as nn
@@ -98,8 +100,7 @@ class TransformerEncoderLayer(nn.Module):
         super(TransformerEncoderLayer, self).__init__()
         self.params = params
 
-        self.multi_head_attn = attention.MultiHeadAttention(
-            params['d_embed_enc'], params['num_heads'])
+        self.multi_head_attn = attention.MultiHeadAttention(params['d_embed_enc'], params['num_heads'])
 
         self.ff = nn.Sequential(
             nn.Linear(params['d_embed_enc'], params['d_ff']),
@@ -107,8 +108,8 @@ class TransformerEncoderLayer(nn.Module):
             nn.Linear(params['d_ff'], params['d_embed_enc'])
         )
 
-        self.norm_attn = nn.LayerNorm(params['d_embed_enc'])
-        self.norm_ff = nn.LayerNorm(params['d_embed_enc'])
+        self.norm_attn = nn.LayerNorm(params['d_embed_enc'], eps=params['layer_norm_eps'])
+        self.norm_ff = nn.LayerNorm(params['d_embed_enc'], eps=params['layer_norm_eps'])
 
         self.dropout_attn = nn.Dropout(params['dropout'])
         self.dropout_ff = nn.Dropout(params['dropout'])
@@ -160,9 +161,9 @@ class TransformerDecoderLayer(nn.Module):
             nn.Linear(params['d_ff'], params['d_embed_dec'])
         )
 
-        self.norm_self_attn = nn.LayerNorm(params['d_embed_dec'])
-        self.norm_enc_dec_attn = nn.LayerNorm(params['d_embed_dec'])
-        self.norm_ff = nn.LayerNorm(params['d_embed_dec'])
+        self.norm_self_attn = nn.LayerNorm(params['d_embed_dec'], eps=params['layer_norm_eps'])
+        self.norm_enc_dec_attn = nn.LayerNorm(params['d_embed_dec'], eps=params['layer_norm_eps'])
+        self.norm_ff = nn.LayerNorm(params['d_embed_dec'], eps=params['layer_norm_eps'])
 
         self.dropout_self_attn = nn.Dropout(params['dropout'])
         self.dropout_enc_dec_attn = nn.Dropout(params['dropout'])
