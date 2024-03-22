@@ -63,6 +63,7 @@ def run():
     parser.add_argument('--tree-pos-enc', action='store_true', default=False, help='use tree positional encoding')
     parser.add_argument('--layer-norm-eps', type=float, default=1e-6, help='Epsilon value used in layer norm')
     parser.add_argument('--seed', type=int, help='Seed for the random number generator')
+    parser.add_argument('--test-limit', type=int, help='Maximum number of samples while testing')
     params = parser.parse_args()
     setup(**vars(params))
 
@@ -237,8 +238,12 @@ def run():
         sys.stdout.flush()
         prediction_model.eval()
 
-        test_subset = data.Subset(test_dataset, torch.arange(100))
-        test_dataloader = data.DataLoader(test_subset, batch_size=params.batch_size, shuffle=False, collate_fn=collate_fn)
+        if params.test_limit is not None:
+            test_dataset = data.Subset(test_dataset, torch.arange(params.test_limit))
+            print("Limiting test set size to", len(test_dataset))
+        else:
+            print("Using the whole test dataset:", len(test_dataset), "samples")
+        test_dataloader = data.DataLoader(test_dataset, batch_size=params.batch_size, shuffle=False, collate_fn=collate_fn)
 
         if params.problem == 'ltl':
             if params.tree_pos_enc:

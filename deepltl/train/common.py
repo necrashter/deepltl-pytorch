@@ -8,6 +8,7 @@ from argparse import ArgumentParser
 import torch
 import torch.nn.functional as F
 import numpy as np
+from tqdm import tqdm
 
 from deepltl.data.vocabulary import CharacterVocabulary
 from deepltl.data import ltl_parser
@@ -132,7 +133,7 @@ def test_and_analyze_ltl(pred_fn, dataloader, torch_device, in_vocab=None, out_v
     proc = subprocess.Popen(['python3', '-m', 'deepltl.data.trace_check'] + proc_args,
                             stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, universal_newlines=True, bufsize=1000000)
     try:
-        for x in dataloader:
+        for x in tqdm(dataloader, leave=False):
             x = tuple(datum.to(torch_device) for datum in x)
             if kwargs['tree_pos_enc']:
                 data, label, pe = x
@@ -150,16 +151,15 @@ def test_and_analyze_ltl(pred_fn, dataloader, torch_device, in_vocab=None, out_v
     except BrokenPipeError:
         sys.exit('Pipe to trace checker broke. output:' + proc.communicate()[0])
     sys.stdout.flush()
-    proc_out, _ = proc.communicate()
+    proc.communicate()
     if not os.path.exists('tmp_test_results.png') or not os.path.exists('tmp_test_results.svg'):
-        print("SUBPROCESS OUTPUT:")
-        print(proc_out)
-        raise ValueError('No png/svg file found')
+        print('No png/svg file found')
+        print('Eihter the subprocess failed, or there were no valid outputs')
+        return
     shutil.copy('tmp_test_results.png', os.path.join(plotdir, plot_name + '.png'))
     os.remove('tmp_test_results.png')
     shutil.copy('tmp_test_results.svg', os.path.join(plotdir, plot_name + '.svg'))
     os.remove('tmp_test_results.svg')
-    return proc_out
 
 
 def get_ass(lst):
