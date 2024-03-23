@@ -1,26 +1,19 @@
-# DeepLTL
+# DeepLTL PyTorch
 
-This repository is the official implementation of the ICLR'21 paper [Teaching Temporal Logics to Neural Networks](https://arxiv.org/abs/2003.04218).
+This project trains a Transformer model to generate traces for linear-time temporal logical (LTL) formulas.
 
-We trained a Transformer to predict solutions to linear-time temporal logical (LTL) formulas. Our trained models evince powerful generalization properties, namely, the generalization to the semantics of the logic, and the generalization to larger formulas than seen during training. This repository includes 1) a data generation framework for teaching reasoning tasks on propositional logic and LTL to a Transformer and 2) a training framework with our experimental results, where our models predict solutions to propositional and LTL formulas.
+This repository is the unofficial PyTorch implementation of the ICLR'21 paper [Teaching Temporal Logics to Neural Networks](https://arxiv.org/abs/2003.04218).
+Read the paper or see the README file [in the official repository](https://github.com/reactive-systems/deepltl) for more information about the project.
 
-**Contribution.** Generally, formulas have many solutions and the training data thus depends on the particularities of the generator.
-While the Transformer does not perfectly predict the generator’s output, it still produces correct solutions to almost all formulas, even when its prediction deviates from the generator.
-With this learning framework, it seems to be easier to learn the semantics of the logics than the particularities of the generator.
-
-The Transformer preserves this semantic generalization even when challenged with formulas of a size it has never encountered before (see following picture):
-<img src="images/ltl_treepe_gen.png">
-Performance of our best model *(only trained on LTL formulas up to length 35)* on LTL formulas up to length 50 with a tree positional encoding. Exact syntactic matches are displayed in green, the semantic accuracy in light green and the incorrect predictions in orange. The shaded area indicates the formula sizes the model was not trained on. For more details see [Teaching Temporal Logics to Neural Networks](https://arxiv.org/abs/2003.04218).
     
-Surprisingly, the Transformer solves almost all LTL formulas in our test set including those for which our generator timed out. For example, very complex formulas such as (LTL formula above, predicted satisfying trace below):
-<img src="images/example.png">
-
 ## Requirements
 
-To install the python package, run:
-
-```setup
-pip install .
+Ensure that you have a working PyTorch installation.
+Then, install the required pip packages as follows:
+```sh
+pip install tqdm numpy matplotlib
+pip install python-sat[aiger,approxmc,cryptosat,pblib]
+pip install py-aiger-sat
 ```
 
 In addition, the LTL, automata manipulation and model checking library [Spot](https://spot.lrde.epita.fr) is required. Please follow the [download and installation instructions](https://spot.lrde.epita.fr/install.html) on their website.
@@ -28,45 +21,47 @@ In addition, the LTL, automata manipulation and model checking library [Spot](ht
 
 ## Training
 
-To train a linear-time temporal logic model with dataset **ltl-35** for 5 epochs with default parameters, run:
-
-```train
-python -m deepltl.train.train_transformer --problem='ltl' --ds-name='ltl-35' --epochs=5
+To train a model on the `ltl-35` dataset with the best parameters given by the authors, run:
+```sh
+python -m deepltl.train.train_transformer --problem='ltl' --ds-name='ltl-35' --num-layers=8 --num-heads=8 --d-ff=1024 --batch-size=768 --run-name=ltl-best --epochs=50
+# Optionally, you can enable tree-based positional encoding using --tree-pos-enc
 ```
 
-To train a propositional logic model with dataset **prop-35** for 5 epochs with default parameters, run:
-
-```train
-python -m deepltl.train.train_transformer --problem='prop' --ds-name='prop-35' --epochs=5
+You can start Tensorboard to visualize training metrics by running:
+```sh
+tensorboard --logdir ./runs/ltl-best/tensorboard/
 ```
 
-Below the available datasets and parameters are described.
+The figure below plots the syntactic accuracy (the ratio of exact formula matches, called `accuracy_per_sequence` in Tensorboard) of this model without tree-based positional encoding.
+This result is quite close to the result from the paper given in Figure 8.
+<img src="images/accuracy.png">
+
+I didn't test training with the `prop-35` dataset.
+For a list of available datasets, see the README file [in the official repository](https://github.com/reactive-systems/deepltl).
 
 ## Evaluation
 
-To evaluate a linear-time temporal logic model on dataset **ltl-50-test** with default parameters, run:
+Simply add `--test` argument to the command for evalution.  Some datasets such as `ltl-50-test` can only be used for testing.
 
-```eval
-python -m deepltl.train.train_transformer --problem='ltl' --ds-name='ltl-50-test' --test
+Assuming that you've trained a model named `ltl-tree` with tree-based positional encoding and the parameters given in the previous section, you can test this model on the first 1000 samples of `ltl-50-test` as follows:
+```sh
+python -m deepltl.train.train_transformer --problem='ltl' --ds-name='ltl-50-test' --num-layers=8 --num-heads=8 --d-ff=1024 --batch-size=768 --tree-pos-enc --run-name=ltl-tree --test --test-limit=1000
 ```
+This command will create `test.log` and `test_results.png` files in `runs/ltl-tree/`.
+Note that this command may take a lot of time due to trace checking.
 
-To evaluate a propositional logic model on dataset **prop-50-test** with default parameters, run:
-```eval
-python -m deepltl.train.train_transformer --problem='prop' --ds-name='prop-50-test' --test
-```
+Now, we had a model that was only trained on LTL formulas up to length 35 (`ltl-35` dataset), and using the previous command, we have evaluated it on LTL formulas up to length 50 (`ltl-50-test` dataset).
+The results are as follows:
+<img src="images/gen.png">
 
-## Datasets
-
-- **ltl-35** 1 million LTL formulas of maximum size 35 with 5 different propositons split into a training set of 800k formulas, a validation set of 100k formulas and a test set of 100k formulas
-- **ltl-50-test** a test set of 20k LTL formulas of size 35 to 50 with 5 different propositons
-- **prop-35** 1 million propositional logic formulas of maximum size 35 with 5 differnt propositons split into a training set of 800k formulas, a validation set of 100k formulas and a test set of 100k formulas
-- **prop-50-test** a test set of 20k propositional logic formulas of size 35 to 50 with 5 different propositons
-- **prop-60-no-derived** 1 million propositional logic formulas of maximum size 60 with 10 different propositions and without derived operators (exclusive or, equivalence) split into a training set of 800k formulas, a validation set of 100k formulas and a test set of 100k formulas
+This shows that the model can generalize to the formulas of a size it has never been trained on.
+The figure below shows the corresponding results from the paper for comparison (see the shaded area):
+<img src="images/ltl_treepe_gen.png">
 
 
-## Parameter
+## Command Line Arguments
 
-The following parameter can be specified when training the models:
+### Model Settings
 
 | command line argument | default   | parameter                                                    |
 | --------------------- | --------- | ------------------------------------------------------------ |
@@ -80,65 +75,23 @@ The following parameter can be specified when training the models:
 | d-ff                  | 512       | dimension of fully-connected feed-forward networks           |
 | ff-activation         | relu      | activation function of fully-connected feed-forward networks |
 | dropout               | 0.1       | amount of dropped out units                                  |
-| warmup-steps          | 4000      | number of warmup steps                                       |
 | tree-pos-enc          | False     | whether to use the tree positional encoding                  |
+| layer-norm-eps        | 1e-6      | epsilon value used in layer normalization                    |
+
+### Training
+
+| command line argument | default   | parameter                                                    |
+| --------------------- | --------- | ------------------------------------------------------------ |
+| warmup-steps          | 4000      | number of warmup steps                                       |
 | batch-size            | 100       | batch size                                                   |
 | epochs                | 3         | number of epochs                                             |
+| seed                  | None      | seed for the random number generator for reproducibility     |
+
+### Testing
+
+| command line argument | default   | parameter                                                    |
+| --------------------- | --------- | ------------------------------------------------------------ |
+| batch-size            | 100       | batch size                                                   |
 | alpha                 | 1.0       | beam search parameter for length normalization               |
 | beam-size             | 2         | beam size                                                    |
-
-
-
-## Results
-
-The following table shows our best performing models and the corresponing parameters:
-
-|                    | Prop      | LTL       |
-| ------------------ | --------- | --------- |
-| ds-name            | prop-35   | ltl-35    |
-| d-embed-enc        | 128       | 128       |
-| d-embed-dec        | 64        | 128       |
-| num-layers         | 6         | 8         |
-| num-heads          | 6         | 8         |
-| d-ff               | 512       | 1024      |
-| dropout            | 0.1       | 0.1       |
-| batch-size         | 1024      | 768       |
-| epochs             | 64        | 48        |
-| alpha              | 1.0       | 1.0       |
-| beam-size          | 3         | 3         |
-|                    |           |           |
-| exact match        | 58.1%     | 83.8%     |
-| correct            | 96.5%     | 98.5%     |
-
-
-## Data Generation
-### Linear-Time Temporal Logic
-The **ltl-35** dataset was created by calling
-```
-python -m deepltl.data.generator --num-aps 5 --num-formulas 1000000 --tree-size 35 --timeout 120 --alpha 0.112
-```
-where `alpha` is used to tune the distribution of formulas, so that it is actually uniform in size.
-For more details on available parameters, consider the help (`-h`).
-
-### Propositional Logic
-To generate a propositional logic dataset, the following additional package is required:
-* `py-aiger-cnf`: simple_aig2cnf branch from https://github.com/MarkusRabe/py-aiger-cnf/tree/simple_aig2cnf
-
-The **prop-35** dataset was created by calling
-```
-python -m deepltl.data.sat_generator --num-aps 5 --num-examples 1000000 --max-size 35 --alpha 0.095 --target-directory data_prop
-```
-Different node distributions and minimal sizes have to be set manually in the code.
-
-## How To Cite
-
-```
-@inproceedings{deepltl,
-  author    = {Christopher Hahn and Frederik Schmitt and Jens U. Kreber and Markus Norman Rabe and Bernd Finkbeiner},
-  title     = {Teaching Temporal Logics to Neural Networks},
-  booktitle = {9th International Conference on Learning Representations, {ICLR} 2021, Virtual Event, Austria, May 3-7, 2021},
-  publisher = {OpenReview.net},
-  year      = {2021},
-  url       = {https://openreview.net/forum?id=dOcQK-f4byz}
-}
-```
+| test-limit            | None      | limit the number of samples while testing                    |
