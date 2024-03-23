@@ -79,8 +79,8 @@ def per_size_analysis(results, **kwargs):
     dist_ax.set_ylim(-10, 110)
     dist_ax.legend()
     if 'save_analysis' in kwargs and kwargs['save_analysis'] is not None:
-        figure.savefig(kwargs['save_analysis'] + '.png')
-        figure.savefig(kwargs['save_analysis'] + '.svg')
+        figure.savefig(kwargs['save_analysis'] + '.png', bbox_inches="tight", dpi=192)
+        figure.savefig(kwargs['save_analysis'] + '.svg', bbox_inches="tight", dpi=192)
     # plt.show()
 
     # collapse size-wise data for further processing
@@ -257,8 +257,9 @@ def calculate_accuracy(formulas_file, traces_file, targets_file, log_file, sat_p
                     log.write("INCORRECT {:d}\ninput : {}\noutput: {}\ntarget: {}\n\n".format(line_num, formula_obj.to_str('spot'), trace_obj.to_str('spot'), target_obj.to_str('spot') if target_obj else None))
                 if sem_desp_syn and syntactically_correct:
                     raise RuntimeError('Trace is said to be syntactically correct, but does not fulfil formula!')
+            log.flush()
 
-        tictoc.histogram(show=False)
+        tictoc.histogram(show=False, save_to=kwargs["tictoc_file"])
         # evaluation
         if per_size:
             res = per_size_analysis(res, **kwargs)
@@ -281,6 +282,7 @@ if __name__ == '__main__':
     parser.add_argument('-t', '--traces-file', required=True)
     parser.add_argument('-r', '--targets-file', help='optional, will use trace check if not given')
     parser.add_argument('-l', '--log-file', help='file to write log about incorrect or invalid formulas to')
+    parser.add_argument('--tictoc-file', help='file to write tictoc plot')
     parser.add_argument('-s', '--sat-prob-file', help='file to write an equivalent sat problem to')
     infix_or_polish = parser.add_mutually_exclusive_group()
     infix_or_polish.add_argument('--polish', dest='polish', action='store_true', default=True, help='Expect formulas and traces in polish notation; default True')

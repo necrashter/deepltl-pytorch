@@ -35,7 +35,7 @@ class TicToc():
             axes[idx].title.set_text(name)
             axes[idx].set_yscale('log', nonpositive='clip')
         if save_to is not None:
-            figure.savefig(save_to)
+            figure.savefig(save_to, bbox_inches="tight", dpi=192)
         if show:
             plt.show()
         else:

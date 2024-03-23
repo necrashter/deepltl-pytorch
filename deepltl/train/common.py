@@ -130,6 +130,7 @@ def test_and_analyze_ltl(pred_fn, dataloader, torch_device, in_vocab=None, out_v
     proc_args = ['-f', '-', '-t', '-', '-r', '-', '--per-size', '--save-analysis', 'tmp_test_results', '--validator', 'spot', '--log-level', '3']
     if log_name is not None:
         proc_args.extend(['-l', os.path.join(plotdir, log_name)])
+    proc_args.extend(['--tictoc-file', os.path.join(plotdir, "test_tictoc.png")])
     proc = subprocess.Popen(['python3', '-m', 'deepltl.data.trace_check'] + proc_args,
                             stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, universal_newlines=True, bufsize=1000000)
     try:
