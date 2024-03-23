@@ -95,3 +95,5 @@ The figure below shows the corresponding results from the paper for comparison (
 | alpha                 | 1.0       | beam search parameter for length normalization               |
 | beam-size             | 2         | beam size                                                    |
 | test-limit            | None      | limit the number of samples while testing                    |
+| eval-threads          | cpu count | Number of threads used for trace checking                    |
+| eval-timeout          | 30        | Timeout (in seconds) for checking a single trace             |

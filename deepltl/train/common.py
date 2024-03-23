@@ -1,6 +1,7 @@
+from collections import defaultdict
 import os
+import json
 import sys
-import shutil
 import random
 import subprocess
 from argparse import ArgumentParser
@@ -11,7 +12,7 @@ import numpy as np
 from tqdm import tqdm
 
 from deepltl.data.vocabulary import CharacterVocabulary
-from deepltl.data import ltl_parser
+from deepltl.data import ltl_parser, trace_check
 
 
 class CustomPadCollate:
@@ -68,8 +69,14 @@ def argparser():
     parser.add_argument('--epochs', type=int, default=3)
     parser.add_argument('--initial-epoch', type=int, default=0, help='used to track the epoch number correctly when resuming training')
     parser.add_argument('--training-samples', type=int, default=None)
+
+    # Beam search
     parser.add_argument('--alpha', type=float, default=1)
     parser.add_argument('--beam-size', type=int, default=2)
+
+    # Evaluation
+    parser.add_argument('--eval-threads', type=int, help="Number of threads used while trace checking")
+    parser.add_argument('--eval-timeout', type=int, default=30, help="Timeout before the trace checking for a single trace is terminated in seconds")
 
     return parser
 
@@ -124,43 +131,52 @@ def get_latest_checkpoint(checkpoint_path):
     return os.path.join(checkpoint_path, filename)
 
 
-def test_and_analyze_ltl(pred_fn, dataloader, torch_device, in_vocab=None, out_vocab=None, plot_name='test_results', log_name=None, **kwargs):
-    plotdir = os.path.join(kwargs['job_dir'], kwargs['run_name'])
+def test_and_analyze_ltl(pred_fn, dataloader, torch_device, in_vocab, out_vocab, **kwargs):
+    plotdir = os.path.join(kwargs['job_dir'], kwargs['run_name'], "test")
     os.makedirs(plotdir, exist_ok=True)
-    proc_args = ['-f', '-', '-t', '-', '-r', '-', '--per-size', '--save-analysis', 'tmp_test_results', '--validator', 'spot', '--log-level', '3']
-    if log_name is not None:
-        proc_args.extend(['-l', os.path.join(plotdir, log_name)])
-    proc_args.extend(['--tictoc-file', os.path.join(plotdir, "test_tictoc.png")])
-    proc = subprocess.Popen(['python3', '-m', 'deepltl.data.trace_check'] + proc_args,
-                            stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, universal_newlines=True, bufsize=1000000)
-    try:
-        for x in tqdm(dataloader, leave=False):
-            x = tuple(datum.to(torch_device) for datum in x)
-            if kwargs['tree_pos_enc']:
-                data, label, pe = x
-                pred = pred_fn(data, pe)
-            else:
-                data, label = x
-                pred = pred_fn(data)
-            for i in range(pred.shape[0]):
-                label_decoded = out_vocab.decode(list(label[i, :]))
-                if not label_decoded:
-                    label_decoded = '-'
-                step_in = in_vocab.decode(list(data[i, :])) + '\n' + out_vocab.decode(list(pred[i, :])) + '\n' + label_decoded + '\n'
-                proc.stdin.write(step_in)
-                proc.stdin.flush()
-    except BrokenPipeError:
-        sys.exit('Pipe to trace checker broke. output:' + proc.communicate()[0])
-    sys.stdout.flush()
-    proc.communicate()
-    if not os.path.exists('tmp_test_results.png') or not os.path.exists('tmp_test_results.svg'):
-        print('No png/svg file found')
-        print('Eihter the subprocess failed, or there were no valid outputs')
-        return
-    shutil.copy('tmp_test_results.png', os.path.join(plotdir, plot_name + '.png'))
-    os.remove('tmp_test_results.png')
-    shutil.copy('tmp_test_results.svg', os.path.join(plotdir, plot_name + '.svg'))
-    os.remove('tmp_test_results.svg')
+    # List of tuples (formula, predicted trace, target trace)
+    predictions = []
+    for x in tqdm(dataloader, desc="Predict"):
+        x = tuple(datum.to(torch_device) for datum in x)
+        if kwargs['tree_pos_enc']:
+            data, label, pe = x
+            pred = pred_fn(data, pe)
+        else:
+            data, label = x
+            pred = pred_fn(data)
+        for i in range(pred.shape[0]):
+            label_decoded = out_vocab.decode(list(label[i, :]))
+            if not label_decoded:
+                label_decoded = '-'
+            formula = in_vocab.decode(list(data[i, :]))
+            trace = out_vocab.decode(list(pred[i, :]))
+            predictions.append((formula, trace, label_decoded))
+
+    results = trace_check.evaluate_ltl(predictions, threads=kwargs["eval_threads"], timeout=kwargs["eval_timeout"])
+    with open(os.path.join(plotdir, "evaluation.json"), 'w') as f:
+        f.write(json.dumps(results, indent=4))
+
+    analysis = trace_check.analyze_results(results)
+    res = trace_check.per_size_analysis(analysis, save_analysis=os.path.join(plotdir, "size_hist"))
+    total = len(results)
+    res["correct"] = res["exact match"] + res["semantically correct"]
+    # For ordering headers in res
+    order = defaultdict(lambda: 100)
+    for i, e in enumerate(["correct", "exact match", "semantically correct", "incorrect"]):
+        order[e] = i
+    # Create summary string
+    summary = ["EVALUATION SUMMARY"]
+    for key, count in sorted(res.items(), key=lambda pair: order[pair[0]]):
+        summary.append(f"{key.capitalize()}: {count}/{total}, {count / total * 100:f}%")
+    summary = "\n".join(summary)
+
+    print()
+    print(summary)
+    with open(os.path.join(plotdir, "summary.txt"), 'w') as f:
+        f.write(summary)
+        f.write("\n\nCommand Line Arguments:\n")
+        f.write(" ".join(sys.argv[1:]))
+        f.write("\n")
 
 
 def get_ass(lst):
