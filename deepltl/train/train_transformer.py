@@ -125,6 +125,8 @@ def run():
             params.max_decode_length = 22
         else:
             params.max_decode_length = 12
+    else:
+        sys.exit(f'Unknown problem type: {params.problem}')
 
     params.input_vocab_size = input_vocab.vocab_size()
     params.input_pad_id = input_vocab.pad_id
@@ -147,21 +149,21 @@ def run():
     device = torch.device(params.device)
     print("Using device:", device)
 
+    # Model
+    model = Transformer(vars(params)).to(device)
+    print("Parameter count of the model: {:_}".format(sum(p.numel() for p in model.parameters())))
+    checkpoint_path = get_run_path("checkpoints", **vars(params))
+    latest_checkpoint = get_latest_checkpoint(checkpoint_path)
+
+    # Dataset batch collate function
     collate_fn = CustomPadCollate(params.d_embed_enc if params.tree_pos_enc else None)
-    if not params.test: # train mode
+
+    if not params.test:  # train mode
         train_dataset, val_dataset, test_dataset = get_dataset_splits(dataset_name, ['train', 'val', 'test'], dataset_class, dataset_args, data_dir)
         # NOTE: Tensorflow implementation used to drop the last batch (drop_last=True in PyTorch Dataloader)
         train_dataloader = data.DataLoader(train_dataset, batch_size=params.batch_size, shuffle=True, collate_fn=collate_fn)
         val_dataloader = data.DataLoader(val_dataset, batch_size=params.batch_size, shuffle=False, collate_fn=collate_fn)
-    else:  # test mode
-        test_dataset, = get_dataset_splits(dataset_name, ['test'], dataset_class, dataset_args, data_dir)
 
-    checkpoint_path = get_run_path("checkpoints", **vars(params))
-    latest_checkpoint = get_latest_checkpoint(checkpoint_path)
-
-    if not params.test:  # train mode
-        # Model & Training specification
-        model = Transformer(vars(params)).to(device)
         # lr is 1 so that it's determined solely by the scheduler
         optimizer = optim.Adam(model.parameters(), lr=1.0, betas=(0.9, 0.98), eps=1e-9)
         criterion = nn.CrossEntropyLoss(ignore_index=target_vocab.pad_id, reduction="sum")
@@ -229,14 +231,14 @@ def run():
     
         writer.close()
     else:  # test mode
-        prediction_model = Transformer(vars(params)).to(device)
+        test_dataset, = get_dataset_splits(dataset_name, ['test'], dataset_class, dataset_args, data_dir)
         if latest_checkpoint:
-            prediction_model.load_state_dict(torch.load(latest_checkpoint, map_location=device))
+            model.load_state_dict(torch.load(latest_checkpoint, map_location=device))
             print(f'Loaded weights from checkpoint {latest_checkpoint}')
         else:
             sys.exit('Could not load weights from checkpoint')
         sys.stdout.flush()
-        prediction_model.eval()
+        model.eval()
 
         if params.test_limit is not None:
             test_dataset = data.Subset(test_dataset, torch.arange(params.test_limit))
@@ -249,15 +251,15 @@ def run():
             if params.tree_pos_enc:
                 def pred_fn(x, pe):
                     # Target is still none
-                    output = prediction_model(x, None, pe)
+                    output = model(x, None, pe)
                     return output["outputs"]
             else:
                 def pred_fn(x):
-                    output = prediction_model(x)
+                    output = model(x)
                     return output["outputs"]
             test_and_analyze_ltl(pred_fn, test_dataloader, device, input_vocab, target_vocab, log_name='test.log', **vars(params))
         elif params.problem == 'prop':
-            test_and_analyze_sat(prediction_model, test_dataloader, device, input_vocab, target_vocab, log_name='test.log', **vars(params))
+            test_and_analyze_sat(model, test_dataloader, device, input_vocab, target_vocab, log_name='test.log', **vars(params))
         else:
             raise ValueError(f'Unknown problem {params.problem}')
 
