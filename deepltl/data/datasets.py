@@ -4,6 +4,7 @@
 import os
 import torch
 import torch.nn.functional as F
+from tqdm import tqdm
 from torch.utils.data import Dataset
 from deepltl.data import ltl_parser
 from deepltl.data.vocabulary import LTLVocabulary, TraceVocabulary
@@ -32,30 +33,38 @@ class LTLTracesDataset(Dataset):
         prepend_start_token,
         tree_pos_enc,
     ):
-        """Given the name of the dataset tries to automatically determine data dir. Expects data file to have formula\ntrace\n format"""
-        self.data = []
+        """
+        Expects data file to have formula\ntrace\n format
+        """
 
+        def process_pair(line_in, line_out):
+            formula = ltl_parser.ltl_formula(line_in, 'network-polish')
+            encoded_in = ltl_vocab.encode(formula.to_str('network-polish', spacing='all ops').split(' '))
+            encoded_out = trace_vocab.encode(line_out, prepend_start_token=prepend_start_token)
+            if tree_pos_enc:
+                position_list = formula.binary_position_list(format='lbt', add_first=True)
+                # pad to max length
+                max_length = max([len(l) for l in position_list])
+                padded_position_list = [l + [0] * (max_length - len(l)) for l in position_list]
+                datum = torch.tensor(encoded_in), torch.tensor(encoded_out), torch.tensor(padded_position_list, dtype=torch.float32)
+            else:
+                datum = torch.tensor(encoded_in), torch.tensor(encoded_out)
+            return datum
+
+        pairs = []
         with open(filename, 'r') as file:  # expect formula\ntrace\n format
             for line_in in file:
                 if line_in == '\n':
-                    return
-                line_out = next(file)  # get second line
+                    break
+                line_in = line_in.strip()
+                line_out = next(file).strip()  # get second line
                 if max_length_formula >= 0 and len(line_in) > max_length_formula:
                     continue
                 if max_length_trace >= 0 and len(line_out) > max_length_trace:
                     continue
-                formula = ltl_parser.ltl_formula(line_in.strip(), 'network-polish')
-                encoded_in = ltl_vocab.encode(formula.to_str('network-polish', spacing='all ops').split(' '))
-                encoded_out = trace_vocab.encode(line_out.strip(), prepend_start_token=prepend_start_token)
-                if tree_pos_enc:
-                    position_list = formula.binary_position_list(format='lbt', add_first=True)
-                    # pad to max length
-                    max_length = max([len(l) for l in position_list])
-                    padded_position_list = [l + [0] * (max_length - len(l)) for l in position_list]
-                    datum = torch.tensor(encoded_in), torch.tensor(encoded_out), torch.tensor(padded_position_list, dtype=torch.float32)
-                else:
-                    datum = torch.tensor(encoded_in), torch.tensor(encoded_out)
-                self.data.append(datum)
+                pairs.append((line_in, line_out))
+
+        self.data = [process_pair(*pair) for pair in tqdm(pairs, desc=os.path.basename(filename))]
 
     def __len__(self):
         return len(self.data)
@@ -72,25 +81,31 @@ class BooleanSatDataset(Dataset):
             assignment_vocab,
             tree_pos_enc,
         ):
-        self.data = []
 
+        def process_pair(line_in, line_out):
+            formula = ltl_parser.ltl_formula(line_in, 'network-polish')
+            encoded_in = formula_vocab.encode(formula.to_str('network-polish', spacing='all ops').split(' '))
+            encoded_out = assignment_vocab.encode(line_out)
+            if tree_pos_enc:
+                position_list = formula.binary_position_list(format='lbt', add_first=True)
+                # pad to max length
+                max_length = max([len(l) for l in position_list])
+                padded_position_list = [l + [0] * (max_length - len(l)) for l in position_list]
+                datum = torch.tensor(encoded_in), torch.tensor(encoded_out), torch.tensor(padded_position_list, dtype=torch.float32)
+            else:
+                datum = torch.tensor(encoded_in), torch.tensor(encoded_out)
+            return datum
+
+        pairs = []
         with open(filename, 'r') as file:  # expect formula\ntrace\n format
             for line_in in file:
                 if line_in == '\n':
                     return
-                line_out = next(file)  # get second line
-                formula = ltl_parser.ltl_formula(line_in.strip(), 'network-polish')
-                encoded_in = formula_vocab.encode(formula.to_str('network-polish', spacing='all ops').split(' '))
-                encoded_out = assignment_vocab.encode(line_out)
-                if tree_pos_enc:
-                    position_list = formula.binary_position_list(format='lbt', add_first=True)
-                    # pad to max length
-                    max_length = max([len(l) for l in position_list])
-                    padded_position_list = [l + [0] * (max_length - len(l)) for l in position_list]
-                    datum = torch.tensor(encoded_in), torch.tensor(encoded_out), torch.tensor(padded_position_list, dtype=torch.float32)
-                else:
-                    datum = torch.tensor(encoded_in), torch.tensor(encoded_out)
-                self.data.append(datum)
+                line_in = line_in.strip()
+                line_out = next(file).strip()  # get second line
+                pairs.append((line_in, line_out))
+
+        self.data = [process_pair(*pair) for pair in tqdm(pairs, desc=os.path.basename(filename))]
 
     def __len__(self):
         return len(self.data)
