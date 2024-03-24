@@ -32,6 +32,7 @@ class LTLTracesDataset(Dataset):
         max_length_trace,
         prepend_start_token,
         tree_pos_enc,
+        max_samples = None,
     ):
         """
         Expects data file to have formula\ntrace\n format
@@ -64,6 +65,9 @@ class LTLTracesDataset(Dataset):
                     continue
                 pairs.append((line_in, line_out))
 
+        if max_samples is not None:
+            pairs = pairs[:max_samples]
+
         self.data = [process_pair(*pair) for pair in tqdm(pairs, desc=os.path.basename(filename))]
 
     def __len__(self):
@@ -80,6 +84,7 @@ class BooleanSatDataset(Dataset):
             formula_vocab,
             assignment_vocab,
             tree_pos_enc,
+            max_samples = None,
         ):
 
         def process_pair(line_in, line_out):
@@ -104,6 +109,9 @@ class BooleanSatDataset(Dataset):
                 line_in = line_in.strip()
                 line_out = next(file).strip()  # get second line
                 pairs.append((line_in, line_out))
+
+        if max_samples is not None:
+            pairs = pairs[:max_samples]
 
         self.data = [process_pair(*pair) for pair in tqdm(pairs, desc=os.path.basename(filename))]
 

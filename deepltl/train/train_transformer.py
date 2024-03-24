@@ -159,7 +159,7 @@ def run():
     collate_fn = CustomPadCollate(params.d_embed_enc if params.tree_pos_enc else None)
 
     if not params.test:  # train mode
-        train_dataset, val_dataset, test_dataset = get_dataset_splits(dataset_name, ['train', 'val', 'test'], dataset_class, dataset_args, data_dir)
+        train_dataset, val_dataset = get_dataset_splits(dataset_name, ['train', 'val'], dataset_class, dataset_args, data_dir)
         # NOTE: Tensorflow implementation used to drop the last batch (drop_last=True in PyTorch Dataloader)
         train_dataloader = data.DataLoader(train_dataset, batch_size=params.batch_size, shuffle=True, collate_fn=collate_fn)
         val_dataloader = data.DataLoader(val_dataset, batch_size=params.batch_size, shuffle=False, collate_fn=collate_fn)
@@ -231,7 +231,11 @@ def run():
     
         writer.close()
     else:  # test mode
+        if params.test_limit is not None:
+            dataset_args["max_samples"] = params.test_limit
         test_dataset, = get_dataset_splits(dataset_name, ['test'], dataset_class, dataset_args, data_dir)
+        test_dataloader = data.DataLoader(test_dataset, batch_size=params.batch_size, shuffle=False, collate_fn=collate_fn)
+
         if latest_checkpoint:
             model.load_state_dict(torch.load(latest_checkpoint, map_location=device))
             print(f'Loaded weights from checkpoint {latest_checkpoint}')
@@ -239,13 +243,6 @@ def run():
             sys.exit('Could not load weights from checkpoint')
         sys.stdout.flush()
         model.eval()
-
-        if params.test_limit is not None:
-            test_dataset = data.Subset(test_dataset, torch.arange(params.test_limit))
-            print("Limiting test set size to", len(test_dataset))
-        else:
-            print("Using the whole test dataset:", len(test_dataset), "samples")
-        test_dataloader = data.DataLoader(test_dataset, batch_size=params.batch_size, shuffle=False, collate_fn=collate_fn)
 
         if params.problem == 'ltl':
             if params.tree_pos_enc:
