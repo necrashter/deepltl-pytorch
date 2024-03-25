@@ -12,7 +12,6 @@ import spot
 
 from deepltl.data import ltl_parser
 from deepltl.data import aalta_wrapper
-from deepltl.utils.utils import TicToc
 from deepltl.data.ltl_parser import LTLTrace, LTLFormula, F_AND, F_IMLIES, F_NEXT, F_GLOBALLY, F_NOT, F_AP
 
 

@@ -13,6 +13,7 @@ from tqdm import tqdm
 
 from deepltl.data.vocabulary import CharacterVocabulary
 from deepltl.data import ltl_parser, trace_check
+from deepltl.utils.utils import tictoc_histogram
 
 
 class CustomPadCollate:
@@ -155,6 +156,9 @@ def test_and_analyze_ltl(pred_fn, dataloader, torch_device, in_vocab, out_vocab,
     results = trace_check.evaluate_ltl(predictions, threads=kwargs["eval_threads"], timeout=kwargs["eval_timeout"])
     with open(os.path.join(plotdir, "evaluation.json"), 'w') as f:
         f.write(json.dumps(results, indent=4))
+
+    eval_times = {"Trace Evaluation Times": [result["time"] for result in results]}
+    tictoc_histogram(eval_times, save_to=os.path.join(plotdir, "trace_times.png"), figsize=(8, 5))
 
     analysis = trace_check.analyze_results(results)
     res = trace_check.per_size_analysis(analysis, save_analysis=os.path.join(plotdir, "size_hist"))

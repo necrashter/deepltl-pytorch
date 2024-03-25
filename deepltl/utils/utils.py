@@ -2,6 +2,28 @@ from timeit import default_timer as timer
 import multiprocessing as mp
 import math
 
+def tictoc_histogram(results, show=False, save_to=None, figsize=None, logscale=True):
+    import matplotlib.pyplot as plt
+
+    num_subplots = len(results)
+    if figsize is None:
+        figsize = (num_subplots * 5, 5)
+    figure, axes = plt.subplots(1, num_subplots, figsize=figsize)
+    if num_subplots == 1:
+        axes = [axes]
+    for idx, (name, vals) in enumerate(results.items()):
+        axes[idx].hist(vals)
+        axes[idx].set_xlabel('Time (s)')
+        axes[idx].title.set_text(name)
+        if logscale:
+            axes[idx].set_yscale('log', nonpositive='clip')
+    if save_to is not None:
+        figure.savefig(save_to, bbox_inches="tight", dpi=192)
+    if show:
+        plt.show()
+    else:
+        plt.close(figure)
+
 class TicToc():
     def __init__(self):
         self.t = None
@@ -21,25 +43,7 @@ class TicToc():
             self.results[name] = [diff]
 
     def histogram(self, show=True, save_to=None, figsize=None):
-        import matplotlib.pyplot as plt
-
-        num_subplots = len(self.results)
-        if figsize is None:
-            figsize = (num_subplots * 5, 5)
-        figure, axes = plt.subplots(1, num_subplots, figsize=figsize)
-        if num_subplots == 1:
-            axes = [axes]
-        for idx, (name, vals) in enumerate(self.results.items()):
-            axes[idx].hist(vals)
-            axes[idx].set_xlabel('time / s')
-            axes[idx].title.set_text(name)
-            axes[idx].set_yscale('log', nonpositive='clip')
-        if save_to is not None:
-            figure.savefig(save_to, bbox_inches="tight", dpi=192)
-        if show:
-            plt.show()
-        else:
-            plt.close(figure)
+        tictoc_histogram(self.results, show, save_to, figsize)
 
 
 def _wrapped_target(pipe_conn: 'mp.connection.Connection'):
