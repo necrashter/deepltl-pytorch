@@ -163,7 +163,7 @@ def test_and_analyze_ltl(pred_fn, dataloader, torch_device, in_vocab, out_vocab,
     analysis = trace_check.analyze_results(results)
     res = trace_check.per_size_analysis(analysis, save_analysis=os.path.join(plotdir, "size_hist"))
     total = len(results)
-    res["correct"] = res["exact match"] + res["semantically correct"]
+    res["correct"] = res.get("exact match", 0) + res.get("semantically correct", 0)  # 0 if key doesn't exist
     # For ordering headers in res
     order = defaultdict(lambda: 100)
     for i, e in enumerate(["correct", "exact match", "semantically correct", "incorrect"]):
